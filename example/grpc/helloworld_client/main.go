@@ -21,7 +21,7 @@ import (
 
 	"opencensus-go-exporter-graphite"
 
-	pb "go.opencensus.io/examples/grpc/proto"
+	pb "opencensus-go-exporter-graphite/example/grpc/proto"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/stats/view"
 	"golang.org/x/net/context"

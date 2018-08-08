@@ -11,7 +11,7 @@ It has these top-level messages:
 	HelloRequest
 	HelloReply
 */
-package helloworld // import "go.opencensus.io/examples/grpc/proto"
+package helloworld
 
 import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
