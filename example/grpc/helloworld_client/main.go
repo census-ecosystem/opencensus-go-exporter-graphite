@@ -19,9 +19,9 @@ import (
 	"os"
 	"time"
 
-	"opencensus-go-exporter-graphite"
+	"contrib.go.opencensus.io/exporter/graphite"
 
-	pb "opencensus-go-exporter-graphite/example/grpc/proto"
+	pb "contrib.go.opencensus.io/exporter/graphite/example/grpc/proto"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/stats/view"
 	"golang.org/x/net/context"

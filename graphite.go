@@ -14,7 +14,7 @@
 
 // Package graphite contains a Graphite exporter that supports exporting
 // OpenCensus views as Graphite metrics.
-package graphite // import "opencensus-go-exporter-graphite"
+package graphite // import "contrib.go.opencensus.io/exporter/graphite"
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ import (
 	"time"
 	"unicode"
 
-	"go.opencensus.io/exporter/graphite/client"
+	"contrib.go.opencensus.io/exporter/graphite/client"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 )
@@ -41,15 +41,15 @@ type Exporter struct {
 
 // Options contains options for configuring the exporter.
 type Options struct {
-	// Host contains de host address for the graphite server
-	// The default value is "127.0.0.1"
+	// Host contains de host address for the graphite server.
+	// The default value is "127.0.0.1".
 	Host string
 
-	// Port is the port in which the carbon endpoint is available
-	// The default value is 2003
+	// Port is the port in which the carbon endpoint is available.
+	// The default value is 2003.
 	Port int
 
-	// Namespace is optional and will be the first element in the path
+	// Namespace is optional and will be the first element in the path.
 	Namespace string
 
 	// OnError is the hook to be called when there is
@@ -150,17 +150,15 @@ func (c *collector) toMetric(v *view.View, row *view.Row, vd *view.Data, e *Expo
 			cumCount += uint64(data.CountPerBucket[i])
 			path.Reset()
 			names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
-			path.WriteString(buildPath(names))
-			path.WriteString(fmt.Sprintf(";le=%.2f", b))
-			path.WriteString(tagValues(row.Tags))
+			tags := tagValues(row.Tags) + fmt.Sprintf(";le=%.2f", b)
+			path.WriteString(buildPath(names, tags))
 			metric, _ := newConstMetric(path.String(), float64(cumCount))
-			sendRequest(e, metric)
+			go sendRequest(e, metric)
 		}
 		path.Reset()
 		names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
-		path.WriteString(buildPath(names))
-		path.WriteString(fmt.Sprintf(";le=+Inf"))
-		path.WriteString(tagValues(row.Tags))
+		tags := tagValues(row.Tags) + ";le=+Inf"
+		path.WriteString(buildPath(names, tags))
 		metric, _ := newConstMetric(path.String(), float64(cumCount))
 		sendRequest(e, metric)
 	default:
@@ -173,8 +171,7 @@ func (c *collector) toMetric(v *view.View, row *view.Row, vd *view.Data, e *Expo
 func formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data, e *Exporter) constMetric {
 	var path bytes.Buffer
 	names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name)}
-	path.WriteString(buildPath(names))
-	path.WriteString(tagValues(row.Tags))
+	path.WriteString(buildPath(names, tagValues(row.Tags)))
 	var metric constMetric
 	switch x := value.(type) {
 	case int64:
@@ -201,14 +198,15 @@ func extractData(e *Exporter, vd *view.Data) {
 // buildPath creates the path for the metric that
 // is expected by graphite. It takes a list of strings
 // and joins with a dot (".")
-func buildPath(names []string) string {
+func buildPath(names []string, tags string) string {
 	var values []string
 	for _, name := range names {
 		if name != "" {
 			values = append(values, name)
 		}
 	}
-	return strings.Join(values, ".")
+	path := strings.Join(values, ".")
+	return path + tags
 }
 
 // tagValues builds the list of tags that is expected

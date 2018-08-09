@@ -13,15 +13,11 @@ exports data to [Graphite](https://graphiteapp.org/), a real-time graphing syste
 ### Import
 
 ```
-import "go.opencensus.io/exporter/graphite"
+import "contrib.go.opencensus.io/exporter/graphite"
 ```
 
 The API of this project is still evolving.
 The use of vendoring or a dependency management tool is recommended.
-
-### Prerequisites
-
-OpenCensus Go libraries require Go 1.8 or later.
 
 ### Register the exporter
 

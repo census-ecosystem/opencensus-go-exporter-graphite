@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"go.opencensus.io/examples/exporter"
-	pb "opencensus-go-exporter-graphite/example/grpc/proto"
+	pb "contrib.go.opencensus.io/exporter/graphite/example/grpc/proto"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"

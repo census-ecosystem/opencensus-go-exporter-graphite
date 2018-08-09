@@ -18,7 +18,7 @@ import (
 	"log"
 	"net/http"
 
-	"opencensus-go-exporter-graphite"
+	"contrib.go.opencensus.io/exporter/graphite"
 
 	"go.opencensus.io/stats/view"
 )

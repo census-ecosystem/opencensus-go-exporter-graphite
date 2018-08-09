@@ -62,7 +62,7 @@ func (graphite *Graphite) Disconnect() error {
 	return err
 }
 
-// The SendMetric method can be used to just pass a metric name and value and
+// SendMetric method can be used to just pass a metric name and value and
 // have it be sent to the Graphite host
 func (graphite *Graphite) SendMetric(stat string, value string, timestamp time.Time) error {
 	metrics := make([]Metric, 1)

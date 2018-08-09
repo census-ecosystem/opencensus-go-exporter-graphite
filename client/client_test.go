@@ -66,7 +66,6 @@ func handleRequest(l net.Listener, conn net.Conn) {
 
 	if err != nil {
 		log.Fatalf("Receive data failed:%s", err)
-		return
 	} else {
 		output = output + data
 	}

@@ -23,7 +23,7 @@ import (
 	"net/http"
 	"time"
 
-	"opencensus-go-exporter-graphite"
+	"contrib.go.opencensus.io/exporter/graphite"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
