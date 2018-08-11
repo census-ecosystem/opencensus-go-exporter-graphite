@@ -23,8 +23,8 @@ import (
 	"net/http"
 	"time"
 
-	"go.opencensus.io/examples/exporter"
 	pb "contrib.go.opencensus.io/exporter/graphite/example/grpc/proto"
+	"go.opencensus.io/examples/exporter"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/trace"
