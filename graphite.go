@@ -27,7 +27,7 @@ import (
 	"time"
 	"unicode"
 
-	"contrib.go.opencensus.io/exporter/graphite/client"
+	"contrib.go.opencensus.io/exporter/graphite/internal/client"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 )

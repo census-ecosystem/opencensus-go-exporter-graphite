@@ -3,7 +3,7 @@ language: go
 go:
   - 1.10.x
 
-go_import_path: github.com/census-ecosystem/opencensus-go-exporter-graphite
+go_import_path: contrib.go.opencensus.io/exporter/graphite
 
 # Don't email me the results of the test runs.
 notifications:
@@ -17,7 +17,6 @@ before_script:
 
 script:
   - embedmd -d README.md              # Ensure embedded code is up-to-date
-  - dep ensure -v
   - go build ./...                    # Ensure dependency updates don't break build
   - if [ -n "$(gofmt -s -l $GO_FILES)" ]; then echo "gofmt the following files:"; gofmt -s -l $GO_FILES; exit 1; fi
   - go vet ./...
