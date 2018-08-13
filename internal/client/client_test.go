@@ -17,11 +17,11 @@ package client
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -33,62 +33,81 @@ const (
 	graphitePort = 2003
 )
 
-var output = ""
-var closeConn = false
+var closeConn = &SafeBool{}
 
-func startServer() {
+type SafeBool struct {
+	closeConn bool
+	m         sync.Mutex
+}
+
+func (i *SafeBool) Get() bool {
+	// The `Lock` method of the mutex blocks if it is already locked
+	// if not, then it blocks other calls until the `Unlock` method is called
+	i.m.Lock()
+	// Defer `Unlock` until this method returns
+	defer i.m.Unlock()
+	// Return the value
+	return i.closeConn
+}
+
+func (i *SafeBool) Set(val bool) {
+	// Similar to the `Get` method, except we Lock until we are done
+	// writing to `i.closeConn`
+	i.m.Lock()
+	defer i.m.Unlock()
+	i.closeConn = val
+}
+
+func TestNewGraphite(t *testing.T) {
+	closeConn.Set(false)
+	var wg sync.WaitGroup
+	output := ""
+
 	l, err := net.Listen("tcp", graphiteHost+":"+strconv.Itoa(graphitePort))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	go func() {
+		wg.Add(1)
 
-	// Close the listener when the application closes.
-	defer l.Close()
-	fmt.Println("Listening on " + graphiteHost + ":" + strconv.Itoa(graphitePort))
-	for {
-		if closeConn {
-			l.Close()
-			return
+		// Close the listener when the application closes.
+		fmt.Println("Listening on "+graphiteHost, graphitePort)
+		for {
+			if closeConn.Get() {
+				wg.Done()
+				l.Close()
+				return
+			}
+			// Listen for an incoming connection.
+			conn, err := l.Accept()
+			if err != nil {
+				fmt.Println("Error accepting: ", err.Error())
+				os.Exit(1)
+			}
+			// Handle connections in a new goroutine.
+			if closeConn.Get() {
+				wg.Done()
+				conn.Close()
+				return
+			}
+			// Make a buffer to hold incoming data.
+			buf := make([]byte, 1024)
+			r := bufio.NewReader(conn)
+
+			// Read the incoming connection into the buffer.
+			reqLen, err := r.Read(buf)
+			data := string(buf[:reqLen])
+
+			switch err {
+			case nil:
+				output = output + data
+			default:
+				t.Fatal("Connection Error")
+				return
+			}
 		}
-		// Listen for an incoming connection.
-		conn, err := l.Accept()
-		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
-		}
-		// Handle connections in a new goroutine.
-		go handleRequest(l, conn)
-	}
-}
-
-// Handles incoming requests.
-func handleRequest(l net.Listener, conn net.Conn) {
-	if closeConn {
-		conn.Close()
-		l.Close()
-		return
-	}
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
-	r := bufio.NewReader(conn)
-
-	defer conn.Close()
-	// Read the incoming connection into the buffer.
-	reqLen, err := r.Read(buf)
-	data := string(buf[:reqLen])
-
-	if err != nil {
-		log.Fatalf("Receive data failed:%s", err)
-	} else {
-		output = output + data
-	}
-}
-
-func TestNewGraphite(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
-	closeConn = false
-	go startServer()
+	}()
 	gh, err := NewGraphite(graphiteHost, graphitePort)
 	if err != nil {
 		t.Error(err)
@@ -97,13 +116,59 @@ func TestNewGraphite(t *testing.T) {
 	if _, ok := gh.conn.(*net.TCPConn); !ok {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
-	closeConn = true
+	closeConn.Set(true)
 }
 
 func TestGraphiteFactoryTCP(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
-	closeConn = false
-	go startServer()
+	closeConn.Set(false)
+	var wg sync.WaitGroup
+	output := ""
+
+	l, err := net.Listen("tcp", graphiteHost+":"+strconv.Itoa(graphitePort))
+	if err != nil {
+		fmt.Println("Error listening:", err.Error())
+		return
+	}
+	go func() {
+		wg.Add(1)
+
+		// Close the listener when the application closes.
+		fmt.Println("Listening on "+graphiteHost, graphitePort)
+		for {
+			if closeConn.Get() {
+				wg.Done()
+				l.Close()
+				return
+			}
+			// Listen for an incoming connection.
+			conn, err := l.Accept()
+			if err != nil {
+				fmt.Println("Error accepting: ", err.Error())
+				os.Exit(1)
+			}
+			// Handle connections in a new goroutine.
+			if closeConn.Get() {
+				wg.Done()
+				conn.Close()
+				return
+			}
+			// Make a buffer to hold incoming data.
+			buf := make([]byte, 1024)
+			r := bufio.NewReader(conn)
+
+			// Read the incoming connection into the buffer.
+			reqLen, err := r.Read(buf)
+			data := string(buf[:reqLen])
+
+			switch err {
+			case nil:
+				output = output + data
+			default:
+				t.Fatal("Connection Error")
+				return
+			}
+		}
+	}()
 	gr, err := NewGraphite(graphiteHost, graphitePort)
 
 	if err != nil {
@@ -114,13 +179,59 @@ func TestGraphiteFactoryTCP(t *testing.T) {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
 
-	closeConn = true
+	closeConn.Set(true)
 }
 
 func TestSendMetric(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
-	closeConn = false
-	go startServer()
+	closeConn.Set(false)
+	var wg sync.WaitGroup
+	output := ""
+
+	l, err := net.Listen("tcp", graphiteHost+":"+strconv.Itoa(graphitePort))
+	if err != nil {
+		fmt.Println("Error listening:", err.Error())
+		return
+	}
+	go func() {
+		wg.Add(1)
+
+		// Close the listener when the application closes.
+		fmt.Println("Listening on "+graphiteHost, graphitePort)
+		for {
+			if closeConn.Get() {
+				wg.Done()
+				l.Close()
+				return
+			}
+			// Listen for an incoming connection.
+			conn, err := l.Accept()
+			if err != nil {
+				fmt.Println("Error accepting: ", err.Error())
+				os.Exit(1)
+			}
+			// Handle connections in a new goroutine.
+			if closeConn.Get() {
+				wg.Done()
+				conn.Close()
+				return
+			}
+			// Make a buffer to hold incoming data.
+			buf := make([]byte, 1024)
+			r := bufio.NewReader(conn)
+
+			// Read the incoming connection into the buffer.
+			reqLen, err := r.Read(buf)
+			data := string(buf[:reqLen])
+
+			switch err {
+			case nil:
+				output = output + data
+			default:
+				t.Fatal("Connection Error")
+				return
+			}
+		}
+	}()
 	gr, err := NewGraphite(graphiteHost, graphitePort)
 
 	if err != nil {
@@ -140,14 +251,62 @@ func TestSendMetric(t *testing.T) {
 		t.Fatal("metric name and value are not being sent")
 	}
 
-	closeConn = true
+	closeConn.Set(true)
 	gr.Disconnect()
 	<-time.After(10 * time.Millisecond)
 }
 
 func TestInvalidHost(t *testing.T) {
-	go startServer()
-	_, err := NewGraphite("Invalid", graphitePort)
+	closeConn.Set(false)
+	var wg sync.WaitGroup
+	output := ""
+
+	l, err := net.Listen("tcp", graphiteHost+":"+strconv.Itoa(graphitePort))
+	if err != nil {
+		fmt.Println("Error listening:", err.Error())
+		return
+	}
+	go func() {
+		wg.Add(1)
+
+		// Close the listener when the application closes.
+		fmt.Println("Listening on "+graphiteHost, graphitePort)
+		for {
+			if closeConn.Get() {
+				wg.Done()
+				l.Close()
+				return
+			}
+			// Listen for an incoming connection.
+			conn, err := l.Accept()
+			if err != nil {
+				fmt.Println("Error accepting: ", err.Error())
+				os.Exit(1)
+			}
+			// Handle connections in a new goroutine.
+			if closeConn.Get() {
+				wg.Done()
+				conn.Close()
+				return
+			}
+			// Make a buffer to hold incoming data.
+			buf := make([]byte, 1024)
+			r := bufio.NewReader(conn)
+
+			// Read the incoming connection into the buffer.
+			reqLen, err := r.Read(buf)
+			data := string(buf[:reqLen])
+
+			switch err {
+			case nil:
+				output = output + data
+			default:
+				t.Fatal("Connection Error")
+				return
+			}
+		}
+	}()
+	_, err = NewGraphite("Invalid", graphitePort)
 	if err == nil {
 		t.Fatal("an error should have been raised")
 	}
