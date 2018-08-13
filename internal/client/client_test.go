@@ -72,11 +72,13 @@ func startServer() {
 	fmt.Println("Listening on " + graphiteHost + ":" + strconv.Itoa(graphitePort))
 	for {
 		if closeConn.Get() {
+			println("close")
 			l.Close()
 			return
 		}
 		// Listen for an incoming connection.
 		conn, err := l.Accept()
+
 		if err != nil {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
@@ -88,10 +90,6 @@ func startServer() {
 
 // Handles incoming requests.
 func handleRequest(conn net.Conn) {
-	if closeConn.Get() {
-		conn.Close()
-		return
-	}
 	// Make a buffer to hold incoming data.
 	buf := make([]byte, 1024)
 	r := bufio.NewReader(conn)
@@ -128,8 +126,8 @@ func TestSendMetric(t *testing.T) {
 	gr.SendMetric(metricName, metricValue, time.Now())
 	<-time.After(10 * time.Millisecond)
 
-	gr.Disconnect()
 	closeConn.Set(true)
+	<-time.After(10 * time.Millisecond)
 
 	if !strings.Contains(output, metricName+" "+metricValue) {
 		t.Fatal("metric name and value are not being sent")
