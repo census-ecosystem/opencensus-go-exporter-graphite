@@ -18,20 +18,20 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
-	"log"
 	"time"
+
+	"sync"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
-	"sync"
 )
-
 
 type mSlice []*stats.Int64Measure
 
@@ -89,6 +89,7 @@ func handler(l net.Listener) {
 		}
 	}
 }
+
 var closeConn = &SafeBool{}
 
 type SafeBool struct {
@@ -266,7 +267,7 @@ func TestMetricsTagsOutput(t *testing.T) {
 
 func TestMetricsPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace:"opencensus"})
+	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestMetricsPathOutput(t *testing.T) {
 
 func TestMetricsSumDataPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace:"opencensus"})
+	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
@@ -402,7 +403,7 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 
 func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace:"opencensus"})
+	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
@@ -470,7 +471,7 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 
 func TestDistributionData(t *testing.T) {
 	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace:"opencensus"})
+	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
