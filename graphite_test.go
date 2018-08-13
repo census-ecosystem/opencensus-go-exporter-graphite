@@ -18,19 +18,20 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
+	"log"
 	"time"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
+	"sync"
 )
+
 
 type mSlice []*stats.Int64Measure
 
@@ -52,6 +53,42 @@ func (vc *vCreator) createAndAppend(name, description string, keys []tag.Key, me
 	*vc = append(*vc, v)
 }
 
+func handler(l net.Listener) {
+	for {
+		if closeConn.Get() {
+			wg.Done()
+			l.Close()
+			return
+		}
+		// Listen for an incoming connection.
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting: ", err.Error())
+			os.Exit(1)
+		}
+		// Handle connections in a new goroutine.
+		if closeConn.Get() {
+			wg.Done()
+			conn.Close()
+			return
+		}
+		// Make a buffer to hold incoming data.
+		buf := make([]byte, 1024)
+		r := bufio.NewReader(conn)
+
+		// Read the incoming connection into the buffer.
+		reqLen, err := r.Read(buf)
+		data := string(buf[:reqLen])
+
+		switch err {
+		case nil:
+			output = output + data
+		default:
+			log.Fatal("Connection Error")
+			return
+		}
+	}
+}
 var closeConn = &SafeBool{}
 
 type SafeBool struct {
@@ -77,64 +114,31 @@ func (i *SafeBool) Set(val bool) {
 	i.closeConn = val
 }
 
+var output = ""
+var wg sync.WaitGroup
+
 func TestMetricsEndpointOutput(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	output := ""
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
 
-	names := []string{"foo", "bar"}
+	names := []string{"foo", "bar", "baz"}
 
 	var measures mSlice
 	for _, name := range names {
@@ -160,6 +164,7 @@ func TestMetricsEndpointOutput(t *testing.T) {
 
 	closeConn.Set(true)
 	wg.Wait()
+
 	if strings.Contains(output, "collected before with the same name and label values") {
 		t.Fatal("metric name and labels being duplicated but must be unique")
 	}
@@ -177,59 +182,21 @@ func TestMetricsEndpointOutput(t *testing.T) {
 
 func TestMetricsTagsOutput(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	output := ""
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
@@ -273,6 +240,7 @@ func TestMetricsTagsOutput(t *testing.T) {
 	defer view.Unregister(vc...)
 
 	view.SetReportingPeriod(time.Millisecond)
+	output = ""
 	for _, m := range measures {
 		stats.Record(ctx, m.M(1))
 		<-time.After(10 * time.Millisecond)
@@ -298,59 +266,21 @@ func TestMetricsTagsOutput(t *testing.T) {
 
 func TestMetricsPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
-	output := ""
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
+	exporter, err := NewExporter(Options{Namespace:"opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
@@ -400,64 +330,25 @@ func TestMetricsPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-
 }
 
 func TestMetricsSumDataPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
-	output := ""
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
+	exporter, err := NewExporter(Options{Namespace:"opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
@@ -511,59 +402,21 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 
 func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
-	output := ""
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
+	exporter, err := NewExporter(Options{Namespace:"opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
@@ -617,59 +470,21 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 
 func TestDistributionData(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
-	output := ""
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
+	exporter, err := NewExporter(Options{Namespace:"opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
@@ -737,59 +552,21 @@ func TestDistributionData(t *testing.T) {
 
 func TestInvalidHost(t *testing.T) {
 	closeConn.Set(false)
-	var wg sync.WaitGroup
-	output := ""
 	exporter, err := NewExporter(Options{Namespace: "opencensus", Host: "invalid"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
+	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
 		fmt.Println("Error listening:", err.Error())
 		return
 	}
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
 	go func() {
 		wg.Add(1)
-
-		// Close the listener when the application closes.
-		fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-		for {
-			if closeConn.Get() {
-
-				wg.Done()
-				l.Close()
-				return
-			}
-			// Listen for an incoming connection.
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting: ", err.Error())
-				os.Exit(1)
-			}
-			// Handle connections in a new goroutine.
-			if closeConn.Get() {
-				wg.Done()
-				conn.Close()
-
-				return
-			}
-			// Make a buffer to hold incoming data.
-			buf := make([]byte, 1024)
-			r := bufio.NewReader(conn)
-
-			// Read the incoming connection into the buffer.
-			reqLen, err := r.Read(buf)
-			data := string(buf[:reqLen])
-
-			switch err {
-			case nil:
-				output = output + data
-			default:
-				t.Fatal("Connection Error")
-				return
-			}
-		}
+		handler(l)
 	}()
 
 	view.RegisterExporter(exporter)
