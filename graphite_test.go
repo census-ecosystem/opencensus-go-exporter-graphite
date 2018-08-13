@@ -134,7 +134,7 @@ func TestMetricsEndpointOutput(t *testing.T) {
 
 	view.RegisterExporter(exporter)
 
-	names := []string{"foo", "bar", "baz"}
+	names := []string{"foo", "bar"}
 
 	var measures mSlice
 	for _, name := range names {
