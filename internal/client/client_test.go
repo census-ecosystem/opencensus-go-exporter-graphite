@@ -133,21 +133,6 @@ func TestSendMetric(t *testing.T) {
 	}
 }
 
-func TestNewGraphite(t *testing.T) {
-	closeConn.Set(false)
-	go startServer()
-	gh, err := NewGraphite(graphiteHost, graphitePort)
-	if err != nil {
-		t.Error(err)
-	}
-
-	if _, ok := gh.conn.(*net.TCPConn); !ok {
-		t.Error("GraphiteHost.conn is not a TCP connection")
-	}
-
-	closeConn.Set(true)
-}
-
 func TestGraphiteFactoryTCP(t *testing.T) {
 	closeConn.Set(false)
 	go startServer()
@@ -162,6 +147,21 @@ func TestGraphiteFactoryTCP(t *testing.T) {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
 
+}
+
+func TestNewGraphite(t *testing.T) {
+	closeConn.Set(false)
+	go startServer()
+	gh, err := NewGraphite(graphiteHost, graphitePort)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if _, ok := gh.conn.(*net.TCPConn); !ok {
+		t.Error("GraphiteHost.conn is not a TCP connection")
+	}
+
+	closeConn.Set(true)
 }
 
 func TestInvalidHost(t *testing.T) {
