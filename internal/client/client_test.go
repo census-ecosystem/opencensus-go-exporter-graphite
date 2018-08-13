@@ -72,7 +72,6 @@ func startServer() {
 	fmt.Println("Listening on " + graphiteHost + ":" + strconv.Itoa(graphitePort))
 	for {
 		if closeConn.Get() {
-			println("close")
 			l.Close()
 			return
 		}
