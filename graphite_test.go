@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,8 +31,6 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 )
-
-var closeConn = false
 
 type mSlice []*stats.Int64Measure
 
@@ -53,6 +52,33 @@ func (vc *vCreator) createAndAppend(name, description string, keys []tag.Key, me
 	*vc = append(*vc, v)
 }
 
+var closeConn = &SafeBool{}
+
+type SafeBool struct {
+	closeConn bool
+	m         sync.Mutex
+}
+
+func (i *SafeBool) Get() bool {
+	// The `Lock` method of the mutex blocks if it is already locked
+	// if not, then it blocks other calls until the `Unlock` method is called
+	i.m.Lock()
+	// Defer `Unlock` until this method returns
+	defer i.m.Unlock()
+	// Return the value
+	return i.closeConn
+}
+
+func (i *SafeBool) Set(val bool) {
+	// Similar to the `Get` method, except we Lock until we are done
+	// writing to `i.closeConn`
+	i.m.Lock()
+	defer i.m.Unlock()
+	i.closeConn = val
+}
+
+var wg sync.WaitGroup
+
 func startServer(e *Exporter) {
 	l, err := net.Listen("tcp", e.opts.Host+":"+strconv.Itoa(e.opts.Port))
 	if err != nil {
@@ -60,11 +86,12 @@ func startServer(e *Exporter) {
 		return
 	}
 
-	// Close the listener when the application closes.
-	defer l.Close()
+	wg.Add(1)
 	fmt.Println("Listening on " + e.opts.Host + ":" + strconv.Itoa(e.opts.Port))
+
 	for {
-		if closeConn {
+		if closeConn.Get() {
+			wg.Done()
 			l.Close()
 			return
 		}
@@ -75,13 +102,13 @@ func startServer(e *Exporter) {
 			os.Exit(1)
 		}
 		// Handle connections in a new goroutine.
-		go handleRequest(conn)
+		handleRequest(conn)
 	}
 }
 
 // Handles incoming requests.
 func handleRequest(conn net.Conn) {
-	if closeConn {
+	if closeConn.Get() {
 		conn.Close()
 		return
 	}
@@ -106,12 +133,11 @@ func handleRequest(conn net.Conn) {
 var output = ""
 
 func TestMetricsEndpointOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 
@@ -141,6 +167,9 @@ func TestMetricsEndpointOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	if strings.Contains(output, "collected before with the same name and label values") {
 		t.Fatal("metric name and labels being duplicated but must be unique")
 	}
@@ -154,16 +183,14 @@ func TestMetricsEndpointOutput(t *testing.T) {
 			t.Fatalf("measurement missing in output: %v", name)
 		}
 	}
-	closeConn = true
 }
 
 func TestMetricsTagsOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
+	closeConn.Set(false)
 	go startServer(exporter)
 
 	view.RegisterExporter(exporter)
@@ -213,6 +240,9 @@ func TestMetricsTagsOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	str := strings.Trim(string(output), "\n")
 	lines := strings.Split(str, "\n")
 	want := "foo;key1=value1;key2=value2"
@@ -226,17 +256,15 @@ func TestMetricsTagsOutput(t *testing.T) {
 	if !ok {
 		t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, want)
 	}
-	closeConn = true
 }
 
 func TestMetricsPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
 
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 
@@ -264,6 +292,9 @@ func TestMetricsPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -284,17 +315,15 @@ func TestMetricsPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestMetricsSumDataPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
 
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 
@@ -322,6 +351,9 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -342,17 +374,15 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestMetricsLastValueDataPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
 
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 
@@ -380,6 +410,9 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -400,16 +433,14 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestDistributionData(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 	view.RegisterExporter(exporter)
@@ -465,12 +496,15 @@ func TestDistributionData(t *testing.T) {
 	// Give the recorder ample time to process recording
 	<-time.After(10 * reportPeriod)
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	for _, line := range wantLines {
 		if !strings.Contains(output, line) {
 			t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, line)
 		}
 	}
-	closeConn = true
+
 }
 
 func TestInvalidHost(t *testing.T) {
@@ -479,7 +513,7 @@ func TestInvalidHost(t *testing.T) {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
 
-	closeConn = false
+	closeConn.Set(false)
 	output = ""
 	go startServer(exporter)
 
@@ -507,8 +541,10 @@ func TestInvalidHost(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	if len(output) != 0 {
 		t.Fatal("should not send any metric")
 	}
-	closeConn = true
 }
