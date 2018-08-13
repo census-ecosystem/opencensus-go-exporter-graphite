@@ -23,10 +23,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
-
-	"sync"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
@@ -66,27 +65,16 @@ func handler(l net.Listener) {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// Handle connections in a new goroutine.
-		if closeConn.Get() {
-			wg.Done()
-			conn.Close()
-			return
-		}
+
 		// Make a buffer to hold incoming data.
 		buf := make([]byte, 1024)
 		r := bufio.NewReader(conn)
 
 		// Read the incoming connection into the buffer.
-		reqLen, err := r.Read(buf)
-		data := string(buf[:reqLen])
+		reqLen, _ := r.Read(buf)
 
-		switch err {
-		case nil:
-			output = output + data
-		default:
-			log.Fatal("Connection Error")
-			return
-		}
+		data := string(buf[:reqLen])
+		output = output + data
 	}
 }
 
@@ -127,9 +115,9 @@ func TestMetricsEndpointOutput(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -179,6 +167,7 @@ func TestMetricsEndpointOutput(t *testing.T) {
 			t.Fatalf("measurement missing in output: %v", name)
 		}
 	}
+	closeConn.Set(true)
 }
 
 func TestMetricsTagsOutput(t *testing.T) {
@@ -190,9 +179,9 @@ func TestMetricsTagsOutput(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -274,9 +263,9 @@ func TestMetricsPathOutput(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -342,9 +331,9 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -410,9 +399,9 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -478,9 +467,9 @@ func TestDistributionData(t *testing.T) {
 	output = ""
 	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
+		t.Fatalf("Error listening: %v", err.Error())
 	}
+
 	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
 
 	go func() {
@@ -539,7 +528,7 @@ func TestDistributionData(t *testing.T) {
 	stats.Record(ctx, ms...)
 
 	// Give the recorder ample time to process recording
-	<-time.After(10 * reportPeriod)
+	<-time.After(50 * reportPeriod)
 
 	closeConn.Set(true)
 	wg.Wait()
@@ -548,56 +537,5 @@ func TestDistributionData(t *testing.T) {
 		if !strings.Contains(output, line) {
 			t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, line)
 		}
-	}
-}
-
-func TestInvalidHost(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace: "opencensus", Host: "invalid"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
-	}
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
-
-	name := "ipsum"
-
-	var measures mSlice
-	measures.createAndAppend(name, name, "")
-
-	var vc vCreator
-	for _, m := range measures {
-		vc.createAndAppend("lorem", m.Description(), nil, m, view.Count())
-	}
-
-	if err := view.Register(vc...); err != nil {
-		t.Fatalf("failed to create views: %v", err)
-	}
-	defer view.Unregister(vc...)
-
-	view.SetReportingPeriod(time.Millisecond)
-
-	for _, m := range measures {
-		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
-	}
-
-	closeConn.Set(true)
-	wg.Wait()
-
-	if len(output) != 0 {
-		t.Fatal("should not send any metric")
 	}
 }
