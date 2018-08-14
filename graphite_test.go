@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,8 +31,6 @@ import (
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 )
-
-var closeConn = false
 
 type mSlice []*stats.Int64Measure
 
@@ -53,18 +52,10 @@ func (vc *vCreator) createAndAppend(name, description string, keys []tag.Key, me
 	*vc = append(*vc, v)
 }
 
-func startServer(e *Exporter) {
-	l, err := net.Listen("tcp", e.opts.Host+":"+strconv.Itoa(e.opts.Port))
-	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		return
-	}
-
-	// Close the listener when the application closes.
-	defer l.Close()
-	fmt.Println("Listening on " + e.opts.Host + ":" + strconv.Itoa(e.opts.Port))
+func handler(l net.Listener) {
 	for {
-		if closeConn {
+		if closeConn.Get() {
+			wg.Done()
 			l.Close()
 			return
 		}
@@ -74,50 +65,69 @@ func startServer(e *Exporter) {
 			fmt.Println("Error accepting: ", err.Error())
 			os.Exit(1)
 		}
-		// Handle connections in a new goroutine.
-		go handleRequest(conn)
+
+		// Make a buffer to hold incoming data.
+		buf := make([]byte, 1024)
+		r := bufio.NewReader(conn)
+
+		// Read the incoming connection into the buffer.
+		reqLen, _ := r.Read(buf)
+
+		data := string(buf[:reqLen])
+		output = output + data
 	}
 }
 
-// Handles incoming requests.
-func handleRequest(conn net.Conn) {
-	if closeConn {
-		conn.Close()
-		return
-	}
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
-	r := bufio.NewReader(conn)
+var closeConn = &SafeBool{}
 
-	defer conn.Close()
-	// Read the incoming connection into the buffer.
-	reqLen, err := r.Read(buf)
-	data := string(buf[:reqLen])
+type SafeBool struct {
+	closeConn bool
+	m         sync.Mutex
+}
 
-	switch err {
-	case nil:
-		output = output + data
-	default:
-		log.Fatalf("Receive data failed:%s", err)
-		return
-	}
+func (i *SafeBool) Get() bool {
+	// The `Lock` method of the mutex blocks if it is already locked
+	// if not, then it blocks other calls until the `Unlock` method is called
+	i.m.Lock()
+	// Defer `Unlock` until this method returns
+	defer i.m.Unlock()
+	// Return the value
+	return i.closeConn
+}
+
+func (i *SafeBool) Set(val bool) {
+	// Similar to the `Get` method, except we Lock until we are done
+	// writing to `i.closeConn`
+	i.m.Lock()
+	defer i.m.Unlock()
+	i.closeConn = val
 }
 
 var output = ""
+var wg sync.WaitGroup
 
 func TestMetricsEndpointOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
 	output = ""
-	go startServer(exporter)
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
 
 	view.RegisterExporter(exporter)
 
-	names := []string{"foo", "bar", "baz"}
+	names := []string{"foo", "bar"}
 
 	var measures mSlice
 	for _, name := range names {
@@ -141,6 +151,9 @@ func TestMetricsEndpointOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	if strings.Contains(output, "collected before with the same name and label values") {
 		t.Fatal("metric name and labels being duplicated but must be unique")
 	}
@@ -154,17 +167,27 @@ func TestMetricsEndpointOutput(t *testing.T) {
 			t.Fatalf("measurement missing in output: %v", name)
 		}
 	}
-	closeConn = true
+	closeConn.Set(true)
 }
 
 func TestMetricsTagsOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
-	go startServer(exporter)
+	output = ""
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
 
 	view.RegisterExporter(exporter)
 
@@ -213,6 +236,9 @@ func TestMetricsTagsOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	str := strings.Trim(string(output), "\n")
 	lines := strings.Split(str, "\n")
 	want := "foo;key1=value1;key2=value2"
@@ -226,19 +252,26 @@ func TestMetricsTagsOutput(t *testing.T) {
 	if !ok {
 		t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, want)
 	}
-	closeConn = true
 }
 
 func TestMetricsPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
-	closeConn = false
 	output = ""
-	go startServer(exporter)
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
 
 	view.RegisterExporter(exporter)
 
@@ -264,6 +297,9 @@ func TestMetricsPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -284,19 +320,26 @@ func TestMetricsPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestMetricsSumDataPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
-	closeConn = false
 	output = ""
-	go startServer(exporter)
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
 
 	view.RegisterExporter(exporter)
 
@@ -322,6 +365,9 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -342,19 +388,26 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestMetricsLastValueDataPathOutput(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-
-	closeConn = false
 	output = ""
-	go startServer(exporter)
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
 
 	view.RegisterExporter(exporter)
 
@@ -380,6 +433,9 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 		<-time.After(10 * time.Millisecond)
 	}
 
+	closeConn.Set(true)
+	wg.Wait()
+
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -400,18 +456,27 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	if !ok {
 		t.Fatal("path not correct")
 	}
-	closeConn = true
 }
 
 func TestDistributionData(t *testing.T) {
-	t.Skip("Failing test, see: census-ecosystem/opencensus-go-exporter-graphite#5")
+	closeConn.Set(false)
 	exporter, err := NewExporter(Options{Namespace: "opencensus"})
 	if err != nil {
 		t.Fatalf("failed to create graphite exporter: %v", err)
 	}
-	closeConn = false
 	output = ""
-	go startServer(exporter)
+	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
+	if err != nil {
+		t.Fatalf("Error listening: %v", err.Error())
+	}
+
+	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
+
+	go func() {
+		wg.Add(1)
+		handler(l)
+	}()
+
 	view.RegisterExporter(exporter)
 	reportPeriod := time.Millisecond
 	view.SetReportingPeriod(reportPeriod)
@@ -463,52 +528,14 @@ func TestDistributionData(t *testing.T) {
 	stats.Record(ctx, ms...)
 
 	// Give the recorder ample time to process recording
-	<-time.After(10 * reportPeriod)
+	<-time.After(50 * reportPeriod)
+
+	closeConn.Set(true)
+	wg.Wait()
 
 	for _, line := range wantLines {
 		if !strings.Contains(output, line) {
 			t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, line)
 		}
 	}
-	closeConn = true
-}
-
-func TestInvalidHost(t *testing.T) {
-	exporter, err := NewExporter(Options{Namespace: "opencensus", Host: "invalid"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-
-	closeConn = false
-	output = ""
-	go startServer(exporter)
-
-	view.RegisterExporter(exporter)
-
-	name := "ipsum"
-
-	var measures mSlice
-	measures.createAndAppend(name, name, "")
-
-	var vc vCreator
-	for _, m := range measures {
-		vc.createAndAppend("lorem", m.Description(), nil, m, view.Count())
-	}
-
-	if err := view.Register(vc...); err != nil {
-		t.Fatalf("failed to create views: %v", err)
-	}
-	defer view.Unregister(vc...)
-
-	view.SetReportingPeriod(time.Millisecond)
-
-	for _, m := range measures {
-		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
-	}
-
-	if len(output) != 0 {
-		t.Fatal("should not send any metric")
-	}
-	closeConn = true
 }
