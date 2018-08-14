@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -36,7 +35,6 @@ import (
 type Exporter struct {
 	// Options used to register and log stats
 	opts Options
-	c    *collector
 }
 
 // Options contains options for configuring the exporter.
@@ -71,32 +69,14 @@ func NewExporter(o Options) (*Exporter, error) {
 		o.Port = 2003
 	}
 
-	collector := newCollector(o)
 	e := &Exporter{
 		opts: o,
-		c:    collector,
 	}
 
 	return e, nil
 }
 
 var _ view.Exporter = (*Exporter)(nil)
-
-// registerViews creates the view map and prevents duplicated views
-func (c *collector) registerViews(views ...*view.View) {
-	for _, thisView := range views {
-		sig := viewSignature(c.opts.Host, thisView)
-		c.registeredViewsMu.Lock()
-		_, ok := c.registeredViews[sig]
-		c.registeredViewsMu.Unlock()
-		if !ok {
-			desc := sanitize(thisView.Name)
-			c.registeredViewsMu.Lock()
-			c.registeredViews[sig] = desc
-			c.registeredViewsMu.Unlock()
-		}
-	}
-}
 
 func (o *Options) onError(err error) {
 	if o.OnError != nil {
@@ -113,14 +93,12 @@ func (e *Exporter) ExportView(vd *view.Data) {
 	if len(vd.Rows) == 0 {
 		return
 	}
-	e.c.addViewData(vd)
-
 	extractData(e, vd)
 }
 
 // toMetric receives the view data information and creates metrics that are adequate according to
 // graphite documentation.
-func (c *collector) toMetric(v *view.View, row *view.Row, vd *view.Data, e *Exporter) {
+func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) {
 	switch data := row.Data.(type) {
 	case *view.CountData:
 		go sendRequest(e, formatTimeSeriesMetric(data.Value, row, vd, e))
@@ -185,13 +163,8 @@ func formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data, e *
 // extractData extracts stats data and calls toMetric
 // to convert the data to metrics formatted to graphite
 func extractData(e *Exporter, vd *view.Data) {
-	sig := viewSignature(e.c.opts.Namespace, vd.View)
-	e.c.registeredViewsMu.Lock()
-	_ = e.c.registeredViews[sig]
-	e.c.registeredViewsMu.Unlock()
-
 	for _, row := range vd.Rows {
-		e.c.toMetric(vd.View, row, vd, e)
+		e.toMetric(vd.View, row, vd)
 	}
 }
 
@@ -221,31 +194,6 @@ func tagValues(t []tag.Tag) string {
 	return buffer.String()
 }
 
-type collector struct {
-	opts Options
-	mu   sync.Mutex // mu guards all the fields.
-
-	// viewData's are accumulated and atomically
-	// appended to on every Export invocation, from
-	// stats. These views are cleared out when
-	// Collect is invoked and the cycle is repeated.
-	viewData map[string]*view.Data
-
-	registeredViewsMu sync.Mutex
-
-	registeredViews map[string]string
-}
-
-// addViewData assigns the view data to the correct view
-func (c *collector) addViewData(vd *view.Data) {
-	c.registerViews(vd.View)
-	sig := viewSignature(c.opts.Host, vd.View)
-
-	c.mu.Lock()
-	c.viewData[sig] = vd
-	c.mu.Unlock()
-}
-
 type constMetric struct {
 	desc string
 	val  float64
@@ -259,46 +207,13 @@ func newConstMetric(desc string, value float64) (constMetric, error) {
 	}, nil
 }
 
-// newCollector returns a collector struct
-func newCollector(opts Options) *collector {
-	return &collector{
-		opts:            opts,
-		registeredViews: make(map[string]string),
-		viewData:        make(map[string]*view.Data),
-	}
-}
-
-// viewName builds a unique name composed of the namespace
-// and the sanitized view name. Therefore, if the namespace
-// is 'opencensus and the viewName is 'cash/register'
-// the return will be o'pencensus_cash_register'
-func viewName(namespace string, v *view.View) string {
-	var name string
-	if namespace != "" {
-		name = namespace + "_"
-	}
-	return name + sanitize(v.Name)
-}
-
-// viewSignature builds a signature that will identify a view
-// The signature consists of the namespace, the viewName and the
-// list of tags. Example: Namespace_viewName-tagName...
-func viewSignature(namespace string, v *view.View) string {
-	var buf bytes.Buffer
-	buf.WriteString(viewName(namespace, v))
-	for _, k := range v.TagKeys {
-		buf.WriteString("-" + k.Name())
-	}
-	return buf.String()
-}
-
 // sendRequest sends a package of data containing one metric
 func sendRequest(e *Exporter, data constMetric) {
-	Graphite, err := client.NewGraphite(e.opts.Host, e.opts.Port)
+	g, err := client.NewGraphite(e.opts.Host, e.opts.Port)
 	if err != nil {
 		e.opts.onError(fmt.Errorf("Error creating graphite: %#v", err))
 	} else {
-		Graphite.SendMetric(data.desc, strconv.FormatFloat(data.val, 'f', -1, 64), time.Now())
+		g.SendMetric(data.desc, strconv.FormatFloat(data.val, 'f', -1, 64), time.Now())
 	}
 }
 
