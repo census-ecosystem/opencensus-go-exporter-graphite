@@ -15,8 +15,8 @@
 package client
 
 import (
-	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"time"
 )
@@ -27,7 +27,7 @@ type Graphite struct {
 	Host    string
 	Port    int
 	Timeout time.Duration
-	conn    net.Conn
+	Conn    io.Writer
 }
 
 // defaultTimeout is the default number of seconds that we're willing to wait
@@ -39,7 +39,7 @@ func NewGraphite(host string, port int) (*Graphite, error) {
 	var graphite *Graphite
 
 	graphite = &Graphite{Host: host, Port: port}
-	err := graphite.Connect()
+	err := graphite.connect()
 	if err != nil {
 		return nil, err
 	}
@@ -47,64 +47,41 @@ func NewGraphite(host string, port int) (*Graphite, error) {
 	return graphite, nil
 }
 
-// Connect populates the Graphite.conn field with an
+// connect populates the Graphite.conn field with an
 // appropriate TCP connection
-func (graphite *Graphite) Connect() error {
-	if graphite.conn != nil {
-		graphite.conn.Close()
+func (g *Graphite) connect() error {
+	if cl, ok := g.Conn.(io.Closer); ok {
+		cl.Close()
 	}
 
-	address := fmt.Sprintf("%s:%d", graphite.Host, graphite.Port)
-	if graphite.Timeout == 0 {
-		graphite.Timeout = defaultTimeout * time.Second
+	address := fmt.Sprintf("%s:%d", g.Host, g.Port)
+	if g.Timeout == 0 {
+		g.Timeout = defaultTimeout * time.Second
 	}
 
 	var err error
 	var conn net.Conn
 
-	conn, err = net.DialTimeout("tcp", address, graphite.Timeout)
+	conn, err = net.DialTimeout("tcp", address, g.Timeout)
 
-	graphite.conn = conn
+	g.Conn = conn
 
 	return err
 }
 
 // Disconnect closes the Graphite.conn field
-func (graphite *Graphite) Disconnect() error {
-	err := graphite.conn.Close()
-	graphite.conn = nil
+func (g *Graphite) Disconnect() (err error) {
+	if cl, ok := g.Conn.(io.Closer); ok {
+		err = cl.Close()
+	}
+	g.Conn = nil
 	return err
 }
 
 // SendMetric method can be used to just pass a metric name and value and
 // have it be sent to the Graphite host
-func (graphite *Graphite) SendMetric(stat string, value string, timestamp time.Time) error {
-	metrics := make([]Metric, 1)
-	metrics[0] = Metric{
-		Name:      stat,
-		Value:     value,
-		Timestamp: timestamp,
-	}
-	err := graphite.sendMetrics(metrics)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// sendMetrics is an unexported function that is used to write to the TCP
-// connection in order to communicate metrics to the remote Graphite host
-func (graphite *Graphite) sendMetrics(metrics []Metric) error {
-	zeroedMetric := Metric{}
-	var buf bytes.Buffer
-	for _, metric := range metrics {
-		if metric == zeroedMetric {
-			continue
-		}
-
-		buf.WriteString(metric.String())
-	}
-	_, err := graphite.conn.Write(buf.Bytes())
+func (g *Graphite) SendMetric(metric Metric) error {
+	_, err := fmt.Fprint(g.Conn, metric.String())
 	if err != nil {
 		return err
 	}

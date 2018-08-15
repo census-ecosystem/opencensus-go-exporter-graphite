@@ -15,18 +15,14 @@
 package graphite
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log"
-	"net"
-	"os"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
+	"bytes"
+
+	"contrib.go.opencensus.io/exporter/graphite/internal/client"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
@@ -52,80 +48,8 @@ func (vc *vCreator) createAndAppend(name, description string, keys []tag.Key, me
 	*vc = append(*vc, v)
 }
 
-func handler(l net.Listener) {
-	for {
-		if closeConn.Get() {
-			wg.Done()
-			l.Close()
-			return
-		}
-		// Listen for an incoming connection.
-		conn, err := l.Accept()
-		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
-		}
-
-		// Make a buffer to hold incoming data.
-		buf := make([]byte, 1024)
-		r := bufio.NewReader(conn)
-
-		// Read the incoming connection into the buffer.
-		reqLen, _ := r.Read(buf)
-
-		data := string(buf[:reqLen])
-		output = output + data
-	}
-}
-
-var closeConn = &SafeBool{}
-
-type SafeBool struct {
-	closeConn bool
-	m         sync.Mutex
-}
-
-func (i *SafeBool) Get() bool {
-	// The `Lock` method of the mutex blocks if it is already locked
-	// if not, then it blocks other calls until the `Unlock` method is called
-	i.m.Lock()
-	// Defer `Unlock` until this method returns
-	defer i.m.Unlock()
-	// Return the value
-	return i.closeConn
-}
-
-func (i *SafeBool) Set(val bool) {
-	// Similar to the `Get` method, except we Lock until we are done
-	// writing to `i.closeConn`
-	i.m.Lock()
-	defer i.m.Unlock()
-	i.closeConn = val
-}
-
-var output = ""
-var wg sync.WaitGroup
-
 func TestMetricsEndpointOutput(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
+	done := registerExporter(t)
 
 	names := []string{"foo", "bar"}
 
@@ -142,17 +66,13 @@ func TestMetricsEndpointOutput(t *testing.T) {
 	if err := view.Register(vc...); err != nil {
 		t.Fatalf("failed to create views: %v", err)
 	}
-	defer view.Unregister(vc...)
-
-	view.SetReportingPeriod(time.Millisecond)
 
 	for _, m := range measures {
 		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
 	}
 
-	closeConn.Set(true)
-	wg.Wait()
+	view.Unregister(vc...) // trigger flushing of views
+	output := done()
 
 	if strings.Contains(output, "collected before with the same name and label values") {
 		t.Fatal("metric name and labels being duplicated but must be unique")
@@ -167,29 +87,10 @@ func TestMetricsEndpointOutput(t *testing.T) {
 			t.Fatalf("measurement missing in output: %v", name)
 		}
 	}
-	closeConn.Set(true)
 }
 
 func TestMetricsTagsOutput(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
+	done := registerExporter(t)
 
 	name := "bar"
 
@@ -227,19 +128,14 @@ func TestMetricsTagsOutput(t *testing.T) {
 	if err := view.Register(vc...); err != nil {
 		t.Fatalf("failed to create views: %v", err)
 	}
-	defer view.Unregister(vc...)
 
-	view.SetReportingPeriod(time.Millisecond)
-	output = ""
 	for _, m := range measures {
 		stats.Record(ctx, m.M(1))
-		<-time.After(10 * time.Millisecond)
 	}
 
-	closeConn.Set(true)
-	wg.Wait()
-
-	str := strings.Trim(string(output), "\n")
+	view.Unregister(vc...) // trigger flushing of views
+	output := done()
+	str := strings.Trim(output, "\n")
 	lines := strings.Split(str, "\n")
 	want := "foo;key1=value1;key2=value2"
 	ok := false
@@ -255,26 +151,7 @@ func TestMetricsTagsOutput(t *testing.T) {
 }
 
 func TestMetricsPathOutput(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
-
+	done := registerExporter(t)
 	name := "bar"
 
 	var measures mSlice
@@ -290,15 +167,12 @@ func TestMetricsPathOutput(t *testing.T) {
 	}
 	defer view.Unregister(vc...)
 
-	view.SetReportingPeriod(time.Millisecond)
-
 	for _, m := range measures {
 		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
 	}
 
-	closeConn.Set(true)
-	wg.Wait()
+	view.Unregister(vc...) // trigger flushing of views
+	output := done()
 
 	lines := strings.Split(output, "\n")
 	ok := false
@@ -323,25 +197,7 @@ func TestMetricsPathOutput(t *testing.T) {
 }
 
 func TestMetricsSumDataPathOutput(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
+	done := registerExporter(t)
 
 	name := "lorem"
 
@@ -358,15 +214,12 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 	}
 	defer view.Unregister(vc...)
 
-	view.SetReportingPeriod(time.Millisecond)
-
 	for _, m := range measures {
 		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
 	}
 
-	closeConn.Set(true)
-	wg.Wait()
+	view.Unregister(vc...) // trigger flushing of views
+	output := done()
 
 	lines := strings.Split(output, "\n")
 	ok := false
@@ -391,26 +244,7 @@ func TestMetricsSumDataPathOutput(t *testing.T) {
 }
 
 func TestMetricsLastValueDataPathOutput(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
-
+	done := registerExporter(t)
 	name := "ipsum"
 
 	var measures mSlice
@@ -426,16 +260,11 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 	}
 	defer view.Unregister(vc...)
 
-	view.SetReportingPeriod(time.Millisecond)
-
 	for _, m := range measures {
 		stats.Record(context.Background(), m.M(1))
-		<-time.After(10 * time.Millisecond)
 	}
-
-	closeConn.Set(true)
-	wg.Wait()
-
+	view.Unregister(vc...) // trigger flushing of views
+	output := done()
 	lines := strings.Split(output, "\n")
 	ok := false
 	for _, line := range lines {
@@ -459,47 +288,19 @@ func TestMetricsLastValueDataPathOutput(t *testing.T) {
 }
 
 func TestDistributionData(t *testing.T) {
-	closeConn.Set(false)
-	exporter, err := NewExporter(Options{Namespace: "opencensus"})
-	if err != nil {
-		t.Fatalf("failed to create graphite exporter: %v", err)
-	}
-	output = ""
-	l, err := net.Listen("tcp", exporter.opts.Host+":"+strconv.Itoa(exporter.opts.Port))
-	if err != nil {
-		t.Fatalf("Error listening: %v", err.Error())
-	}
-
-	fmt.Println("Listening on " + exporter.opts.Host + ":" + strconv.Itoa(exporter.opts.Port))
-
-	go func() {
-		wg.Add(1)
-		handler(l)
-	}()
-
-	view.RegisterExporter(exporter)
-	reportPeriod := time.Millisecond
-	view.SetReportingPeriod(reportPeriod)
+	done := registerExporter(t)
 
 	m := stats.Float64("tests/bills", "payments by denomination", stats.UnitDimensionless)
 	v := &view.View{
 		Name:        "cash/register",
 		Description: "this is a test",
 		Measure:     m,
-
 		Aggregation: view.Distribution(1, 5, 10, 20, 50, 100, 250),
 	}
-
 	if err := view.Register(v); err != nil {
 		t.Fatalf("Register error: %v", err)
 	}
-	defer view.Unregister(v)
-
-	// Give the reporter ample time to process registration
-	<-time.After(10 * reportPeriod)
-
 	values := []float64{0.25, 245.67, 12, 1.45, 199.9, 7.69, 187.12}
-
 	ctx := context.Background()
 	ms := make([]stats.Measurement, len(values))
 	for _, value := range values {
@@ -526,16 +327,41 @@ func TestDistributionData(t *testing.T) {
 	}
 
 	stats.Record(ctx, ms...)
-
-	// Give the recorder ample time to process recording
-	<-time.After(50 * reportPeriod)
-
-	closeConn.Set(true)
-	wg.Wait()
+	view.Unregister(v) // trigger flush of view
+	output := done()
 
 	for _, line := range wantLines {
 		if !strings.Contains(output, line) {
 			t.Fatalf("\ngot:\n%s\n\nwant:\n%s\n", output, line)
 		}
+	}
+}
+
+// register an exporter and return a func to close the exporter and return
+// everything that has been exported.
+func registerExporter(t *testing.T) func() string {
+	e, err := NewExporter(Options{
+		Namespace: "opencensus",
+		OnError: func(err error) {
+			log.Printf("OnError %s: %s\n", t.Name(), err)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		g   client.Graphite
+		buf bytes.Buffer
+	)
+	e.connectGraphite = func() (*client.Graphite, error) {
+		return &g, nil
+	}
+	g.Conn = &buf
+	view.RegisterExporter(e)
+	return func() string {
+		e.Flush()
+		view.UnregisterExporter(e)
+		e = nil
+		return buf.String()
 	}
 }

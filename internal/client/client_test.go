@@ -131,19 +131,20 @@ func TestSendMetric(t *testing.T) {
 		t.Error(err)
 	}
 
-	if _, ok := gr.conn.(*net.TCPConn); !ok {
+	if _, ok := gr.Conn.(*net.TCPConn); !ok {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
 
 	metricName := "graphite.path"
-	metricValue := "2"
-	gr.SendMetric(metricName, metricValue, time.Now())
+	metricValue := 2.0
+	gr.SendMetric(Metric{metricName, metricValue, time.Now()})
 	<-time.After(10 * time.Millisecond)
 
 	closeConn.Set(true)
 
-	if !strings.Contains(output.Get(), metricName+" "+metricValue) {
-		t.Fatal("metric name and value are not being sent")
+	o := output.Get()
+	if !strings.Contains(o, "graphite.path 2") {
+		t.Fatal("metric name and value are not being sent:", o)
 	}
 
 	gr.Disconnect()
@@ -169,7 +170,7 @@ func TestNewGraphite(t *testing.T) {
 
 	closeConn.Set(true)
 
-	if _, ok := gh.conn.(*net.TCPConn); !ok {
+	if _, ok := gh.Conn.(*net.TCPConn); !ok {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
 
@@ -193,7 +194,7 @@ func TestGraphiteFactoryTCP(t *testing.T) {
 		t.Error(err)
 	}
 
-	if _, ok := gr.conn.(*net.TCPConn); !ok {
+	if _, ok := gr.Conn.(*net.TCPConn); !ok {
 		t.Error("GraphiteHost.conn is not a TCP connection")
 	}
 
