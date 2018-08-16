@@ -21,22 +21,30 @@ import (
 	"fmt"
 	"log"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
+
+	"os"
 
 	"contrib.go.opencensus.io/exporter/graphite/internal/client"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
+	"google.golang.org/api/support/bundler"
 )
+
+var debug bool
+
+func init() {
+	debug = os.Getenv("OPENCENSUS_GRAPHITE_DEBUG") != ""
+}
 
 // Exporter exports stats to Graphite
 type Exporter struct {
 	// Options used to register and log stats
-	opts Options
-	c    *collector
+	opts            Options
+	bundler         *bundler.Bundler
+	connectGraphite func() (*client.Graphite, error)
 }
 
 // Options contains options for configuring the exporter.
@@ -59,6 +67,17 @@ type Options struct {
 	OnError func(err error)
 }
 
+const (
+	defaultBufferedViewDataLimit = 10000 // max number of view.Data in flight
+	defaultBundleCountThreshold  = 100   // max number of view.Data per bundle
+)
+
+// defaultDelayThreshold is the amount of time we wait to receive new view.Data
+// from the aggregation pipeline. We normally expect to receive it in rapid
+// succession, so we set this to a small value to avoid waiting
+// unnecessarily before submitting.
+const defaultDelayThreshold = 200 * time.Millisecond
+
 // NewExporter returns an exporter that exports stats to Graphite.
 func NewExporter(o Options) (*Exporter, error) {
 	if o.Host == "" {
@@ -71,32 +90,28 @@ func NewExporter(o Options) (*Exporter, error) {
 		o.Port = 2003
 	}
 
-	collector := newCollector(o)
 	e := &Exporter{
 		opts: o,
-		c:    collector,
+	}
+
+	b := bundler.NewBundler((*view.Data)(nil), func(items interface{}) {
+		vds := items.([]*view.Data)
+		e.sendBundle(vds)
+	})
+	e.bundler = b
+
+	e.bundler.BufferedByteLimit = defaultBufferedViewDataLimit
+	e.bundler.BundleCountThreshold = defaultBundleCountThreshold
+	e.bundler.DelayThreshold = defaultDelayThreshold
+
+	e.connectGraphite = func() (*client.Graphite, error) {
+		return client.NewGraphite(o.Host, o.Port)
 	}
 
 	return e, nil
 }
 
 var _ view.Exporter = (*Exporter)(nil)
-
-// registerViews creates the view map and prevents duplicated views
-func (c *collector) registerViews(views ...*view.View) {
-	for _, thisView := range views {
-		sig := viewSignature(c.opts.Host, thisView)
-		c.registeredViewsMu.Lock()
-		_, ok := c.registeredViews[sig]
-		c.registeredViewsMu.Unlock()
-		if !ok {
-			desc := sanitize(thisView.Name)
-			c.registeredViewsMu.Lock()
-			c.registeredViews[sig] = desc
-			c.registeredViewsMu.Unlock()
-		}
-	}
-}
 
 func (o *Options) onError(err error) {
 	if o.OnError != nil {
@@ -110,28 +125,26 @@ func (o *Options) onError(err error) {
 // Each OpenCensus stats records will be converted to
 // corresponding Graphite Metric
 func (e *Exporter) ExportView(vd *view.Data) {
-	if len(vd.Rows) == 0 {
-		return
-	}
-	e.c.addViewData(vd)
+	e.bundler.Add(vd, 1)
+}
 
-	extractData(e, vd)
+func (e *Exporter) Flush() {
+	e.bundler.Flush()
 }
 
 // toMetric receives the view data information and creates metrics that are adequate according to
 // graphite documentation.
-func (c *collector) toMetric(v *view.View, row *view.Row, vd *view.Data, e *Exporter) {
+func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client.Metric {
 	switch data := row.Data.(type) {
 	case *view.CountData:
-		go sendRequest(e, formatTimeSeriesMetric(data.Value, row, vd, e))
+		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.SumData:
-		go sendRequest(e, formatTimeSeriesMetric(data.Value, row, vd, e))
+		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.LastValueData:
-		go sendRequest(e, formatTimeSeriesMetric(data.Value, row, vd, e))
+		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.DistributionData:
 		// Graphite does not support histogram. In order to emulate one,
 		// we use the accumulative count of the bucket.
-		var path bytes.Buffer
 		indicesMap := make(map[float64]int)
 		buckets := make([]float64, 0, len(v.Aggregation.Buckets))
 		for i, b := range v.Aggregation.Buckets {
@@ -142,56 +155,75 @@ func (c *collector) toMetric(v *view.View, row *view.Row, vd *view.Data, e *Expo
 		}
 		sort.Float64s(buckets)
 
+		var metrics []client.Metric
+
 		// Now that the buckets are sorted by magnitude
 		// we can create cumulative indicesmap them back by reverse index
 		cumCount := uint64(0)
 		for _, b := range buckets {
 			i := indicesMap[b]
 			cumCount += uint64(data.CountPerBucket[i])
-			path.Reset()
 			names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
 			tags := tagValues(row.Tags) + fmt.Sprintf(";le=%.2f", b)
-			path.WriteString(buildPath(names, tags))
-			metric, _ := newConstMetric(path.String(), float64(cumCount))
-			go sendRequest(e, metric)
+			metric := client.Metric{
+				Name:      buildPath(names, tags),
+				Value:     float64(cumCount),
+				Timestamp: vd.End,
+			}
+			metrics = append(metrics, metric)
 		}
-		path.Reset()
 		names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
 		tags := tagValues(row.Tags) + ";le=+Inf"
-		path.WriteString(buildPath(names, tags))
-		metric, _ := newConstMetric(path.String(), float64(cumCount))
-		sendRequest(e, metric)
+		metric := client.Metric{
+			Name:      buildPath(names, tags),
+			Value:     float64(cumCount),
+			Timestamp: vd.End,
+		}
+		metrics = append(metrics, metric)
+		return metrics
 	default:
 		e.opts.onError(fmt.Errorf("aggregation %T is not yet supported", data))
+		return nil
 	}
 }
 
 // formatTimeSeriesMetric creates a CountData metric, SumData or LastValueData
 // and returns it to toMetric
-func formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data, e *Exporter) constMetric {
-	var path bytes.Buffer
-	names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name)}
-	path.WriteString(buildPath(names, tagValues(row.Tags)))
-	var metric constMetric
+func (e *Exporter) formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data) client.Metric {
+	var val float64
 	switch x := value.(type) {
 	case int64:
-		metric, _ = newConstMetric(path.String(), float64(x))
+		val = float64(x)
 	case float64:
-		metric, _ = newConstMetric(path.String(), x)
+		val = x
 	}
-	return metric
+	names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name)}
+	return client.Metric{
+		Name:      buildPath(names, tagValues(row.Tags)),
+		Value:     val,
+		Timestamp: vd.End,
+	}
 }
 
-// extractData extracts stats data and calls toMetric
+// sendBundle extracts stats data and calls toMetric
 // to convert the data to metrics formatted to graphite
-func extractData(e *Exporter, vd *view.Data) {
-	sig := viewSignature(e.c.opts.Namespace, vd.View)
-	e.c.registeredViewsMu.Lock()
-	_ = e.c.registeredViews[sig]
-	e.c.registeredViewsMu.Unlock()
-
-	for _, row := range vd.Rows {
-		e.c.toMetric(vd.View, row, vd, e)
+func (e *Exporter) sendBundle(vds []*view.Data) {
+	g, err := e.connectGraphite()
+	if err != nil {
+		e.opts.onError(err)
+		return
+	}
+	defer g.Disconnect()
+	for _, vd := range vds {
+		for _, row := range vd.Rows {
+			for _, metric := range e.toMetric(vd.View, row, vd) {
+				debugOut("send", metric)
+				err = g.SendMetric(metric)
+				if err != nil {
+					e.opts.OnError(err)
+				}
+			}
+		}
 	}
 }
 
@@ -219,87 +251,6 @@ func tagValues(t []tag.Tag) string {
 		buffer.WriteString(fmt.Sprintf(";%s=%s", t.Key.Name(), t.Value))
 	}
 	return buffer.String()
-}
-
-type collector struct {
-	opts Options
-	mu   sync.Mutex // mu guards all the fields.
-
-	// viewData's are accumulated and atomically
-	// appended to on every Export invocation, from
-	// stats. These views are cleared out when
-	// Collect is invoked and the cycle is repeated.
-	viewData map[string]*view.Data
-
-	registeredViewsMu sync.Mutex
-
-	registeredViews map[string]string
-}
-
-// addViewData assigns the view data to the correct view
-func (c *collector) addViewData(vd *view.Data) {
-	c.registerViews(vd.View)
-	sig := viewSignature(c.opts.Host, vd.View)
-
-	c.mu.Lock()
-	c.viewData[sig] = vd
-	c.mu.Unlock()
-}
-
-type constMetric struct {
-	desc string
-	val  float64
-}
-
-// newConstMetric returns a constMetric struct
-func newConstMetric(desc string, value float64) (constMetric, error) {
-	return constMetric{
-		desc: desc,
-		val:  value,
-	}, nil
-}
-
-// newCollector returns a collector struct
-func newCollector(opts Options) *collector {
-	return &collector{
-		opts:            opts,
-		registeredViews: make(map[string]string),
-		viewData:        make(map[string]*view.Data),
-	}
-}
-
-// viewName builds a unique name composed of the namespace
-// and the sanitized view name. Therefore, if the namespace
-// is 'opencensus and the viewName is 'cash/register'
-// the return will be o'pencensus_cash_register'
-func viewName(namespace string, v *view.View) string {
-	var name string
-	if namespace != "" {
-		name = namespace + "_"
-	}
-	return name + sanitize(v.Name)
-}
-
-// viewSignature builds a signature that will identify a view
-// The signature consists of the namespace, the viewName and the
-// list of tags. Example: Namespace_viewName-tagName...
-func viewSignature(namespace string, v *view.View) string {
-	var buf bytes.Buffer
-	buf.WriteString(viewName(namespace, v))
-	for _, k := range v.TagKeys {
-		buf.WriteString("-" + k.Name())
-	}
-	return buf.String()
-}
-
-// sendRequest sends a package of data containing one metric
-func sendRequest(e *Exporter, data constMetric) {
-	Graphite, err := client.NewGraphite(e.opts.Host, e.opts.Port)
-	if err != nil {
-		e.opts.onError(fmt.Errorf("Error creating graphite: %#v", err))
-	} else {
-		Graphite.SendMetric(data.desc, strconv.FormatFloat(data.val, 'f', -1, 64), time.Now())
-	}
 }
 
 const labelKeySizeLimit = 128
@@ -330,4 +281,13 @@ func sanitizeRune(r rune) rune {
 	}
 	// Everything else turns into an underscore
 	return '_'
+}
+
+func debugOut(a ...interface{}) {
+	if debug {
+		p := make([]interface{}, len(a)+1)
+		copy(p[1:], a)
+		p[0] = "graphite:"
+		fmt.Println(p...)
+	}
 }
