@@ -39,7 +39,30 @@ func init() {
 	debug = os.Getenv("OPENCENSUS_GRAPHITE_DEBUG") != ""
 }
 
-// Exporter exports stats to Graphite
+// Exporter exports views to Graphite.
+//
+// Each view may turn into one or more metrics in Graphite, depending on
+// the view's aggregation type.
+//
+// Views with the Sum, Mean, and Count aggregation types map to individual
+// metrics.
+//
+// Views with the Distribution aggregation type map to multiple metrics, one
+// for each bucket. This is intended to be useful in producing heat maps, as
+// in:
+//
+//   http://docs.grafana.org/features/panels/heatmap/
+//
+// Tags are mapped according to the following convention:
+//
+//   https://graphite.readthedocs.io/en/latest/tags.html
+//
+// View names are used as the basis of the metric names but in order to comply
+// with Graphite restrictions, view names and tags are sanitized before being
+// exported: non-alphanumeric characters will be replaced with underscores,
+// and the name will be truncated at 128 characters.
+//
+// This exporter uses the Carbon plain text protocol.
 type Exporter struct {
 	// Options used to register and log stats
 	opts            Options
@@ -78,7 +101,8 @@ const (
 // unnecessarily before submitting.
 const defaultDelayThreshold = 200 * time.Millisecond
 
-// NewExporter returns an exporter that exports stats to Graphite.
+// NewExporter returns an exporter that exports stats to Graphite with the
+// configured options.
 func NewExporter(o Options) (*Exporter, error) {
 	if o.Host == "" {
 		// default Host
@@ -121,13 +145,13 @@ func (o *Options) onError(err error) {
 	}
 }
 
-// ExportView exports to the Graphite if view data has one or more rows.
-// Each OpenCensus stats records will be converted to
-// corresponding Graphite Metric
+// ExportView exports to Graphite if view data has one or more rows.
 func (e *Exporter) ExportView(vd *view.Data) {
 	e.bundler.Add(vd, 1)
 }
 
+// Flush ensures that any buffered data is sent to Graphite before this method
+// returns.
 func (e *Exporter) Flush() {
 	e.bundler.Flush()
 }
