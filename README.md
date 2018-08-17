@@ -93,6 +93,15 @@ The generated path will look like:
 #### Graph visualization on Graphite
 ![Graph visualization on Graphite](https://i.imgur.com/A4AExV8.png)
 
+#### Heatmap visualization on Grafana
+
+On Grafana it's possible to generate heatmaps based on time series bucket. To do so, it's necessary to configurate the Axes, setting the `Data format` to `Time series bucket` as shown in the image below:
+
+![Axes Configuration](https://i.imgur.com/nAMAMz7.png)
+
+With this configuration, Grafana automatically identifies the bucket boundaries in the data that's being sent and generates the correct heatmap without the need of further configuration.
+
+![Heatmap example](https://i.imgur.com/umU1gsZ.png)
 
 [gitter-image]: https://badges.gitter.im/census-instrumentation/lobby.svg
 [gitter-url]: https://gitter.im/census-instrumentation/lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
