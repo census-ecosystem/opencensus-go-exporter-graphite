@@ -103,5 +103,19 @@ With this configuration, Grafana automatically identifies the bucket boundaries 
 
 ![Heatmap example](https://i.imgur.com/umU1gsZ.png)
 
+In the next image, it's possible to see the heatmap created from  a gRPC client latency view, that can be found in the ocgrpc package as ClientRoundtripLatencyView.
+The code for generating this example is not much different from the grpc example contained in the example folder. The main change is on line 45 of the client:
+
+```go
+...
+    // Register the view to collect gRPC client stats.
+	if err := view.Register(ocgrpc.ClientRoundtripLatencyView); err != nil {
+		log.Fatal(err)
+	}
+...
+```
+
+![Heatmap example with ClientRoundtripLatencyView](https://i.imgur.com/7iI71Yu.png)
+
 [gitter-image]: https://badges.gitter.im/census-instrumentation/lobby.svg
 [gitter-url]: https://gitter.im/census-instrumentation/lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
