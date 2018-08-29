@@ -99,11 +99,14 @@ On Grafana it's possible to generate heatmaps based on time series bucket. To do
 
 ![Axes Configuration](https://i.imgur.com/nAMAMz7.png)
 
-With this configuration, Grafana automatically identifies the bucket boundaries in the data that's being sent and generates the correct heatmap without the need of further configuration.
+It's also necessary to sort the values so that Grafana displays the buckets in the correct order. For that, it's necessary to insert a `SortByName(true)` function on the metrics query as shown in the image below:
 
-![Heatmap example](https://i.imgur.com/umU1gsZ.png)
+![Metrics Configuration](https://i.imgur.com/UrmJ7H9.png)
+
+With this configuration, Grafana automatically identifies the bucket boundaries in the data that's being sent and generate the correct heatmap without the need of further configuration.
 
 In the next image, it's possible to see the heatmap created from  a gRPC client latency view, that can be found in the ocgrpc package as ClientRoundtripLatencyView.
+
 The code for generating this example is not much different from the grpc example contained in the example folder. The main change is on line 45 of the client:
 
 ```go
@@ -115,7 +118,7 @@ The code for generating this example is not much different from the grpc example
 ...
 ```
 
-![Heatmap example with ClientRoundtripLatencyView](https://i.imgur.com/7iI71Yu.png)
+![Heatmap example with ClientRoundtripLatencyView](https://i.imgur.com/gZc8QLf.png)
 
 [gitter-image]: https://badges.gitter.im/census-instrumentation/lobby.svg
 [gitter-url]: https://gitter.im/census-instrumentation/lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
