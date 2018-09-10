@@ -95,7 +95,7 @@ The generated path will look like:
 
 #### Heatmap visualization on Grafana
 
-On Grafana it's possible to generate heatmaps based on time series bucket. To do so, it's necessary to configurate the Axes, setting the `Data format` to `Time series bucket` as shown in the image below:
+On Grafana it's possible to generate heatmaps based on time series bucket. To do so, it's necessary to configure the Axes, setting the `Data format` to `Time series bucket` as shown in the image below:
 
 ![Axes Configuration](https://i.imgur.com/nAMAMz7.png)
 
