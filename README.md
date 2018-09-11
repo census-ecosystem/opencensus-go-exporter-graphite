@@ -112,9 +112,9 @@ The code for generating this example is not much different from the grpc example
 ```go
 ...
 // Register the view to collect gRPC client stats.
-	if err := view.Register(ocgrpc.ClientRoundtripLatencyView); err != nil {
-		log.Fatal(err)
-	}
+if err := view.Register(ocgrpc.ClientRoundtripLatencyView); err != nil {
+	log.Fatal(err)
+}
 ...
 ```
 
