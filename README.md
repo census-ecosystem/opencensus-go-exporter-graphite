@@ -93,6 +93,32 @@ The generated path will look like:
 #### Graph visualization on Graphite
 ![Graph visualization on Graphite](https://i.imgur.com/A4AExV8.png)
 
+#### Heatmap visualization on Grafana
+
+On Grafana it's possible to generate heatmaps based on time series bucket. To do so, it's necessary to configure the Axes, setting the `Data format` to `Time series bucket` as shown in the image below:
+
+![Axes Configuration](https://i.imgur.com/nAMAMz7.png)
+
+It's also necessary to sort the values so that Grafana displays the buckets in the correct order. For that, it's necessary to insert a `SortByName(true)` function on the metrics query as shown in the image below:
+
+![Metrics Configuration](https://i.imgur.com/UrmJ7H9.png)
+
+With this configuration, Grafana automatically identifies the bucket boundaries in the data that's being sent and generate the correct heatmap without the need of further configuration.
+
+In the next image, it's possible to see the heatmap created from  a gRPC client latency view, that can be found in the ocgrpc package as ClientRoundtripLatencyView.
+
+The code for generating this example is not much different from the grpc example contained in the example folder. The main change is on line 45 of the client:
+
+```go
+...
+// Register the view to collect gRPC client stats.
+if err := view.Register(ocgrpc.ClientRoundtripLatencyView); err != nil {
+	log.Fatal(err)
+}
+...
+```
+
+![Heatmap example with ClientRoundtripLatencyView](https://i.imgur.com/gZc8QLf.png)
 
 [gitter-image]: https://badges.gitter.im/census-instrumentation/lobby.svg
 [gitter-url]: https://gitter.im/census-instrumentation/lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
