@@ -274,9 +274,9 @@ func sanitize(s string) string {
 	return s
 }
 
-// sanitizeRune converts anything that is not a letter or digit to an underscore
+// sanitizeRune converts anything that is not a letter, digit, or period to an underscore
 func sanitizeRune(r rune) rune {
-	if unicode.IsLetter(r) || unicode.IsDigit(r) {
+	if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' {
 		return r
 	}
 	// Everything else turns into an underscore
