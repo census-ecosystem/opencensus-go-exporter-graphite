@@ -43,6 +43,7 @@ func init() {
 type Exporter struct {
 	// Options used to register and log stats
 	opts            Options
+	tags            string
 	bundler         *bundler.Bundler
 	connectGraphite func() (*client.Graphite, error)
 }
@@ -59,6 +60,11 @@ type Options struct {
 
 	// Namespace is optional and will be the first element in the path.
 	Namespace string
+
+	// Tags specifies a set of default tags to attach to each metric.
+	// Tags is optional and will work only for Graphite above 1.1.x.
+	// Example : []string{"tagName1=tagValue1", "tagName2=tagValue2"}
+	Tags []string
 
 	// OnError is the hook to be called when there is
 	// an error uploading the stats or tracing data.
@@ -92,6 +98,10 @@ func NewExporter(o Options) (*Exporter, error) {
 
 	e := &Exporter{
 		opts: o,
+	}
+
+	for _, val := range o.Tags {
+		e.tags += ";" + val
 	}
 
 	b := bundler.NewBundler((*view.Data)(nil), func(items interface{}) {
@@ -166,7 +176,7 @@ func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client
 			names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
 			tags := tagValues(row.Tags) + fmt.Sprintf(";le=%.2f", b)
 			metric := client.Metric{
-				Name:      buildPath(names, tags),
+				Name:      buildPath(names, tags, e.tags),
 				Value:     float64(cumCount),
 				Timestamp: vd.End,
 			}
@@ -175,7 +185,7 @@ func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client
 		names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
 		tags := tagValues(row.Tags) + ";le=+Inf"
 		metric := client.Metric{
-			Name:      buildPath(names, tags),
+			Name:      buildPath(names, tags, e.tags),
 			Value:     float64(cumCount),
 			Timestamp: vd.End,
 		}
@@ -199,7 +209,7 @@ func (e *Exporter) formatTimeSeriesMetric(value interface{}, row *view.Row, vd *
 	}
 	names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name)}
 	return client.Metric{
-		Name:      buildPath(names, tagValues(row.Tags)),
+		Name:      buildPath(names, tagValues(row.Tags), e.tags),
 		Value:     val,
 		Timestamp: vd.End,
 	}
@@ -230,7 +240,7 @@ func (e *Exporter) sendBundle(vds []*view.Data) {
 // buildPath creates the path for the metric that
 // is expected by graphite. It takes a list of strings
 // and joins with a dot (".")
-func buildPath(names []string, tags string) string {
+func buildPath(names []string, tags string, eTags string) string {
 	var values []string
 	for _, name := range names {
 		if name != "" {
@@ -238,7 +248,7 @@ func buildPath(names []string, tags string) string {
 		}
 	}
 	path := strings.Join(values, ".")
-	return path + tags
+	return path + tags + eTags
 }
 
 // tagValues builds the list of tags that is expected

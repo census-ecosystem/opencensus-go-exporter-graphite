@@ -302,7 +302,7 @@ func TestDistributionData(t *testing.T) {
 	}
 	values := []float64{0.25, 245.67, 12, 1.45, 199.9, 7.69, 187.12}
 	ctx := context.Background()
-	ms := make([]stats.Measurement, len(values))
+	ms := make([]stats.Measurement, 0)
 	for _, value := range values {
 		mx := m.M(value)
 		ms = append(ms, mx)
