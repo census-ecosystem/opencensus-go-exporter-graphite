@@ -230,7 +230,7 @@ func (e *Exporter) sendBundle(vds []*view.Data) {
 				debugOut("send", metric)
 				err = g.SendMetric(metric)
 				if err != nil {
-					e.opts.OnError(err)
+					e.opts.onError(err)
 				}
 			}
 		}
