@@ -50,14 +50,12 @@ There are some options that can be defined when registering and creating the exp
 | Host | Type `string`. The Host contains the host address for the graphite server | "127.0.0.1" |
 | Port | Type `int`. The Port in which the carbon/graphite endpoint is available | 2003
 | Namespace | Type `string`. The Namespace is a string value to build the metric path. It will be the first value on the path | None |
-| ReportingPeriod | Type `time.Duration`. The ReportingPeriod is a value to determine the buffer timeframe in which the stats data will be sent. | 1 second |
-
 
 ## Implementation Details
 
 To feed data into Graphite in Plaintext, the following format must be used: `<metric path> <metric value> <metric timestamp>`.
 
-  - `metric_path` is the metric namespace.
+  - `metric_path` is the metric name composed of the namespace, view name and tags.
   - `value` is the value of the metric at a given time.
   - `timestamp` is the number of seconds since unix epoch time and the time in which the data is received on Graphite.
 
@@ -65,7 +63,7 @@ To feed data into Graphite in Plaintext, the following format must be used: `<me
 
 ### How the stats data is handled?
 
-The stats data is aggregated into Views (which are essentially a collection of metrics, each with a different set of labels). To know more about the definition of views, check the [Opencensus docs](https://github.com/census-instrumentation/opencensus-specs/blob/master/stats/Export.md)
+The stats data is aggregated into Views (which are essentially a collection of metrics, each with a different set of labels). To know more about the definition of views, check the [OpenCensus docs](https://github.com/census-instrumentation/opencensus-specs/blob/master/stats/Export.md)
 
 ### How the path is built?
 
