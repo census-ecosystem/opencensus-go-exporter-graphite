@@ -1,3 +1,6 @@
+// This file has been modified by Tommaso Doninelli
+// Major changes includes: package change and new methods to build the metric path
+//
 // Copyright 2018, OpenCensus Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package graphite
 
 import (
 	"bufio"

@@ -22,7 +22,6 @@ import (
 
 	"bytes"
 
-	"contrib.go.opencensus.io/exporter/graphite/internal/client"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
@@ -350,10 +349,10 @@ func registerExporter(t *testing.T) func() string {
 		t.Fatal(err)
 	}
 	var (
-		g   client.Graphite
+		g   Graphite
 		buf bytes.Buffer
 	)
-	e.connectGraphite = func() (*client.Graphite, error) {
+	e.connectGraphite = func() (*Graphite, error) {
 		return &g, nil
 	}
 	g.Conn = &buf

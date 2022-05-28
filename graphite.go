@@ -1,3 +1,6 @@
+// This file has been modified by Tommaso Doninelli
+// Major changes includes: package change and new methods to build the metric path
+//
 // Copyright 2018, OpenCensus Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,7 +30,6 @@ import (
 
 	"os"
 
-	"contrib.go.opencensus.io/exporter/graphite/internal/client"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 	"google.golang.org/api/support/bundler"
@@ -43,9 +45,10 @@ func init() {
 type Exporter struct {
 	// Options used to register and log stats
 	opts            Options
-	tags            string
+	tags            []tag.Tag
 	bundler         *bundler.Bundler
-	connectGraphite func() (*client.Graphite, error)
+	pathBuilder     func(nameSpace, viewName string, rowTags, defaultTags []tag.Tag) string
+	connectGraphite func() (*Graphite, error)
 }
 
 // Options contains options for configuring the exporter.
@@ -63,14 +66,18 @@ type Options struct {
 
 	// Tags specifies a set of default tags to attach to each metric.
 	// Tags is optional and will work only for Graphite above 1.1.x.
-	// Example : []string{"tagName1=tagValue1", "tagName2=tagValue2"}
-	Tags []string
+	Tags []tag.Tag
 
 	// OnError is the hook to be called when there is
 	// an error uploading the stats or tracing data.
 	// If no custom hook is set, errors are logged.
 	// Optional.
 	OnError func(err error)
+
+	// MetricPathBuilder return a custom metric path
+	// namespace is Options.Namespace, rowTags are the metric tags and
+	// defaultTags are tags from Options.Tags
+	MetricPathBuilder func(nameSpace, viewName string, rowTags, defaultTags []tag.Tag) string
 }
 
 const (
@@ -100,8 +107,11 @@ func NewExporter(o Options) (*Exporter, error) {
 		opts: o,
 	}
 
-	for _, val := range o.Tags {
-		e.tags += ";" + val
+	e.tags = append(e.tags, o.Tags...)
+
+	e.pathBuilder = defaultPathBuilder
+	if o.MetricPathBuilder != nil {
+		e.pathBuilder = o.MetricPathBuilder
 	}
 
 	b := bundler.NewBundler((*view.Data)(nil), func(items interface{}) {
@@ -114,8 +124,8 @@ func NewExporter(o Options) (*Exporter, error) {
 	e.bundler.BundleCountThreshold = defaultBundleCountThreshold
 	e.bundler.DelayThreshold = defaultDelayThreshold
 
-	e.connectGraphite = func() (*client.Graphite, error) {
-		return client.NewGraphite(o.Host, o.Port)
+	e.connectGraphite = func() (*Graphite, error) {
+		return NewGraphite(o.Host, o.Port)
 	}
 
 	return e, nil
@@ -144,14 +154,14 @@ func (e *Exporter) Flush() {
 
 // toMetric receives the view data information and creates metrics that are adequate according to
 // graphite documentation.
-func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client.Metric {
+func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []Metric {
 	switch data := row.Data.(type) {
 	case *view.CountData:
-		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
+		return []Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.SumData:
-		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
+		return []Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.LastValueData:
-		return []client.Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
+		return []Metric{e.formatTimeSeriesMetric(data.Value, row, vd)}
 	case *view.DistributionData:
 		// Graphite does not support histogram. In order to emulate one,
 		// we use the accumulative count of the bucket.
@@ -165,7 +175,7 @@ func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client
 		}
 		sort.Float64s(buckets)
 
-		var metrics []client.Metric
+		var metrics []Metric
 
 		// Now that the buckets are sorted by magnitude
 		// we can create cumulative indicesmap them back by reverse index
@@ -173,19 +183,17 @@ func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client
 		for _, b := range buckets {
 			i := indicesMap[b]
 			cumCount += uint64(data.CountPerBucket[i])
-			names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
-			tags := tagValues(row.Tags) + fmt.Sprintf(";le=%.2f", b)
-			metric := client.Metric{
-				Name:      buildPath(names, tags, e.tags),
+			rowTags := append(row.Tags, tag.Tag{Key: tag.MustNewKey("bucket"), Value: fmt.Sprintf("le=%.2f", b)})
+			metric := Metric{
+				Name:      e.pathBuilder(sanitize(e.opts.Namespace), sanitize(vd.View.Name), rowTags, e.tags),
 				Value:     float64(cumCount),
 				Timestamp: vd.End,
 			}
 			metrics = append(metrics, metric)
 		}
-		names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name), "bucket"}
-		tags := tagValues(row.Tags) + ";le=+Inf"
-		metric := client.Metric{
-			Name:      buildPath(names, tags, e.tags),
+		rowTags := append(row.Tags, tag.Tag{Key: tag.MustNewKey("bucket"), Value: "le=+Inf"})
+		metric := Metric{
+			Name:      e.pathBuilder(sanitize(e.opts.Namespace), sanitize(vd.View.Name), rowTags, e.tags),
 			Value:     float64(cumCount),
 			Timestamp: vd.End,
 		}
@@ -199,7 +207,7 @@ func (e *Exporter) toMetric(v *view.View, row *view.Row, vd *view.Data) []client
 
 // formatTimeSeriesMetric creates a CountData metric, SumData or LastValueData
 // and returns it to toMetric
-func (e *Exporter) formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data) client.Metric {
+func (e *Exporter) formatTimeSeriesMetric(value interface{}, row *view.Row, vd *view.Data) Metric {
 	var val float64
 	switch x := value.(type) {
 	case int64:
@@ -207,9 +215,8 @@ func (e *Exporter) formatTimeSeriesMetric(value interface{}, row *view.Row, vd *
 	case float64:
 		val = x
 	}
-	names := []string{sanitize(e.opts.Namespace), sanitize(vd.View.Name)}
-	return client.Metric{
-		Name:      buildPath(names, tagValues(row.Tags), e.tags),
+	return Metric{
+		Name:      e.pathBuilder(sanitize(e.opts.Namespace), sanitize(vd.View.Name), row.Tags, e.tags),
 		Value:     val,
 		Timestamp: vd.End,
 	}
@@ -235,6 +242,11 @@ func (e *Exporter) sendBundle(vds []*view.Data) {
 			}
 		}
 	}
+}
+
+func defaultPathBuilder(nameSpace, viewName string, rowTags, defaultTags []tag.Tag) string {
+	names := []string{nameSpace, viewName}
+	return buildPath(names, tagValues(rowTags), tagValues(defaultTags))
 }
 
 // buildPath creates the path for the metric that
